@@ -1,0 +1,47 @@
+{
+  "name": "activity-lottery-web",
+  "version": "1.0.17",
+  "description": "活动抽奖系统 Web/Electron 版本",
+  "author": "Activity Lottery Team",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/lotteryLogic.test.mjs && node tests/staticData.test.mjs && node tests/staticArchitecture.test.mjs && node tests/layoutCss.test.mjs && node tests/uiCopy.test.mjs && node tests/adminSettingsUi.test.mjs && node tests/rendererAutoStop.test.mjs",
+    "check": "node --check app/renderer.js && node --check app/shared/lotteryLogic.mjs && node --check app/shared/staticData.mjs && node --check electron/main.mjs",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "xlsx": "^0.18.5"
+  },
+  "build": {
+    "appId": "com.ehs.lottery",
+    "productName": "活动抽奖系统",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/**/*",
+      "electron/main.mjs",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "executableName": "activity-lottery-web",
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Activity-Lottery-Setup-${version}.${ext}",
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
