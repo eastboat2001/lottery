@@ -20,87 +20,175 @@ function block(selector) {
   return match[1];
 }
 
-test("prize board rows can shrink inside the outer border", () => {
-  const prizeBoard = block(".prize-board");
+function rootBlock(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`));
+  assert.ok(match, `missing root CSS block for ${selector}`);
+  return match[1];
+}
 
-  assert.match(prizeBoard, /grid-template-rows:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(prizeBoard, /overflow:\s*hidden/);
+test("front stage uses a resilient left control and right showcase layout", () => {
+  const appShell = block(".app-shell");
+  const controlPanel = block(".control-panel");
+  const showcasePanel = block(".showcase-panel");
+  const brandMark = block(".topline .brand-mark");
+  const statsGrid = block(".stats-grid");
+
+  assert.match(appShell, /grid-template-columns:\s*minmax\(280px,\s*0\.58fr\)\s+minmax\(0,\s*1\.9fr\)/);
+  assert.match(appShell, /height:\s*100svh/);
+  assert.match(appShell, /min-height:\s*620px/);
+  assert.match(controlPanel, /display:\s*grid/);
+  assert.match(controlPanel, /overflow:\s*hidden/);
+  assert.match(showcasePanel, /min-width:\s*0/);
+  assert.match(showcasePanel, /overflow:\s*hidden/);
+  assert.match(brandMark, /color:\s*#ffffff/);
+  assert.match(brandMark, /font-size:\s*clamp\(32px,\s*3vw,\s*48px\)/);
+  assert.match(statsGrid, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 });
 
-test("prize cells do not force the grid beyond the board height", () => {
-  const prizeCard = block(".prize-card");
-  const startButton = block(".start-button");
+test("main draw button is prominent without using the old input flow", () => {
+  const drawButton = block(".draw-button");
 
-  assert.match(prizeCard, /min-height:\s*0/);
-  assert.match(startButton, /min-height:\s*0/);
+  assert.match(drawButton, /border-radius:\s*999px/);
+  assert.match(drawButton, /min-height:\s*96px/);
+  assert.match(drawButton, /font-size:\s*var\(--draw-button-size\)/);
+  assert.doesNotMatch(css, /#employeeInput|\.input-row/);
 });
 
-test("text-only prize visual is centered in the main prize card image slot", () => {
-  const prizeCardVisual = block(".prize-card .prize-text-visual");
+test("right panel can switch from prize display to winner display", () => {
+  const prizeShowcase = block(".prize-showcase");
+  const prizeCard = rootBlock(".prize-card");
+  const singlePrizeShowcase = block(".prize-showcase.prize-count-1");
+  const singlePrizeCard = block(".prize-showcase.prize-count-1 .prize-card");
+  const prizeHero = block(".prize-showcase.prize-count-1 .prize-card-hero");
+  const certificate = block(".prize-showcase.prize-count-1 .prize-certificate");
+  const uploadedCertificate = block(".prize-certificate.has-image");
+  const uploadedCertificateImage = block(".prize-certificate.has-image .prize-certificate-image");
+  const stageBase = block(".prize-showcase.prize-count-1 .prize-stage-base");
+  const spaciousShowcase = block(".prize-showcase.prize-density-spacious");
+  const twoPrizeShowcase = block(".prize-showcase.prize-density-spacious.prize-count-2");
+  const threePrizeShowcase = block(".prize-showcase.prize-density-spacious.prize-count-3");
+  const multiPrizeCard = block(".prize-showcase:not(.prize-count-1) .prize-card");
+  const multiPrizeHero = block(".prize-showcase:not(.prize-count-1) .prize-card-hero");
+  const multiPrizeRings = block(".prize-showcase:not(.prize-count-1) .prize-stage-rings");
+  const multiPrizeCertificate = block(".prize-showcase:not(.prize-count-1) .prize-certificate");
+  const prizeCertificateLabel = block(".prize-certificate-label");
+  const prizeCertificateAmount = block(".prize-certificate-amount");
+  const multiPrizeCertificateIcon = block(".prize-showcase:not(.prize-count-1) .prize-certificate-icon");
+  const multiPrizeCertificateIconBefore = block(".prize-showcase:not(.prize-count-1) .prize-certificate-icon::before");
+  const multiPrizeCertificateIconAfter = block(".prize-showcase:not(.prize-count-1) .prize-certificate-icon::after");
+  const multiPrizeUploadedCertificate = block(".prize-showcase:not(.prize-count-1) .prize-certificate.has-image");
+  const multiPrizeStageBase = block(".prize-showcase:not(.prize-count-1) .prize-stage-base");
+  const fivePrizeShowcase = block(".prize-showcase.prize-density-spacious.prize-count-5");
+  const standardShowcase = block(".prize-showcase.prize-density-standard");
+  const standardPrizeHero = block(".prize-showcase.prize-density-standard .prize-card-hero");
+  const standardPrizeCertificate = block(".prize-showcase.prize-density-standard .prize-certificate");
+  const compactShowcase = block(".prize-showcase.prize-density-compact");
+  const compactPrizeHero = block(".prize-showcase.prize-density-compact .prize-card-hero");
+  const compactPrizeCertificate = block(".prize-showcase.prize-density-compact .prize-certificate");
+  const compactPrizeInfo = block(".prize-showcase.prize-density-compact .prize-info");
+  const compactPrizeCopy = block(".prize-showcase.prize-density-compact .prize-description,\n.prize-showcase.prize-density-compact .prize-quota");
+  const winnersShowcase = block(".winners-showcase");
+  const winnerTicker = block(".winner-ticker");
 
-  assert.match(prizeCardVisual, /align-self:\s*center/);
-  assert.match(prizeCardVisual, /justify-self:\s*center/);
+  assert.match(prizeShowcase, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(210px,\s*1fr\)\)/);
+  assert.match(singlePrizeShowcase, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(singlePrizeCard, /max-width:\s*1180px/);
+  assert.match(singlePrizeCard, /background:\s*radial-gradient/);
+  assert.match(prizeHero, /position:\s*relative/);
+  assert.match(prizeHero, /min-height:\s*360px/);
+  assert.match(certificate, /transform:\s*rotate\(-?6deg\)/);
+  assert.match(certificate, /linear-gradient\(135deg/);
+  assert.match(uploadedCertificate, /place-items:\s*center/);
+  assert.match(uploadedCertificate, /background:\s*linear-gradient\(180deg/);
+  assert.match(uploadedCertificateImage, /object-fit:\s*contain/);
+  assert.match(uploadedCertificateImage, /max-width:\s*100%/);
+  assert.match(stageBase, /box-shadow:/);
+  assert.match(spaciousShowcase, /align-content:\s*stretch/);
+  assert.match(twoPrizeShowcase, /grid-template-columns:\s*repeat\(2,\s*minmax\(320px,\s*520px\)\)/);
+  assert.match(twoPrizeShowcase, /grid-auto-rows:\s*minmax\(420px,\s*520px\)/);
+  assert.match(twoPrizeShowcase, /justify-content:\s*center/);
+  assert.match(threePrizeShowcase, /grid-template-columns:\s*repeat\(3,\s*minmax\(260px,\s*1fr\)\)/);
+  assert.match(threePrizeShowcase, /grid-auto-rows:\s*minmax\(380px,\s*500px\)/);
+  assert.match(multiPrizeCard, /radial-gradient\(circle at 50% 20%/);
+  assert.match(multiPrizeHero, /min-height:\s*clamp\(138px,\s*22vh,\s*210px\)/);
+  assert.match(multiPrizeRings, /display:\s*block/);
+  assert.match(multiPrizeCertificate, /transform:\s*rotate\(-?4deg\)/);
+  assert.match(prizeCertificateLabel, /max-width:\s*calc\(100% - 64px\)/);
+  assert.match(prizeCertificateAmount, /max-width:\s*calc\(100% - 58px\)/);
+  assert.match(multiPrizeCertificateIcon, /width:\s*34px/);
+  assert.match(multiPrizeCertificateIcon, /right:\s*18px/);
+  assert.match(multiPrizeCertificateIconBefore, /height:\s*31px/);
+  assert.match(multiPrizeCertificateIconAfter, /width:\s*34px/);
+  assert.match(multiPrizeUploadedCertificate, /min-width:\s*176px/);
+  assert.match(multiPrizeStageBase, /display:\s*block/);
+  assert.match(fivePrizeShowcase, /grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(standardShowcase, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(standardPrizeHero, /min-height:\s*132px/);
+  assert.match(standardPrizeCertificate, /width:\s*min\(205px,\s*76%\)/);
+  assert.match(compactShowcase, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(compactPrizeHero, /min-height:\s*110px/);
+  assert.match(compactPrizeCertificate, /width:\s*min\(178px,\s*74%\)/);
+  assert.match(compactPrizeInfo, /gap:\s*3px/);
+  assert.match(compactPrizeCopy, /font-size:\s*12px/);
+  assert.match(prizeCard, /grid-template-columns:\s*1fr/);
+  assert.match(prizeCard, /text-align:\s*center/);
+  assert.match(css, /\.prize-showcase\.prize-density-spacious\s+\.prize-card/);
+  assert.match(css, /\.prize-showcase\.prize-density-compact\s+\.prize-card/);
+  assert.match(winnersShowcase, /overflow:\s*hidden/);
+  assert.match(winnerTicker, /overflow-y:\s*auto/);
+  assert.match(css, /\.showcase-panel\.showing-winners\s+\.prize-showcase/);
+  assert.match(css, /\.showcase-panel\.showing-winners\s+\.winners-showcase/);
 });
 
-test("running prize highlight uses a deeper yellow cursor", () => {
-  const activePrizeCard = block(".prize-card.active");
+test("hidden panels stay hidden even when component classes define display", () => {
+  const hidden = block("[hidden]");
 
-  assert.match(activePrizeCard, /border:\s*5px solid #ffb000/);
-  assert.match(activePrizeCard, /background:\s*linear-gradient\(135deg,\s*#ffe08a 0%,\s*#fff0bd 100%\)/);
+  assert.match(hidden, /display:\s*none\s*!important/);
 });
 
-test("sold out prize cards use a prominent unavailable color", () => {
-  const soldOutPrizeCard = block(".prize-card.sold-out");
-  const soldOutText = block(".prize-card.sold-out h3,\n.prize-card.sold-out p");
-  const soldOutVisual = block(".prize-card.sold-out .prize-text-visual");
-  const soldOutLabel = block(".sold-out-label");
+test("winner list supports manual vertical scrolling for many results", () => {
+  const scrollingTicker = block(".winner-ticker.scrolling");
+  const compactTicker = block(".winner-ticker.compact-grid");
+  const compactTrack = block(".winner-ticker.compact-grid .winner-track");
+  const compactRow = block(".winner-ticker.compact-grid .winner-row");
+  const winnerTrack = block(".winner-track");
+  const scrollingTrack = block(".winner-ticker.scrolling .winner-track");
+  const scrollingRow = block(".winner-ticker.scrolling .winner-row");
 
-  assert.match(soldOutPrizeCard, /border-color:\s*#ff6b57/);
-  assert.match(soldOutPrizeCard, /background:\s*linear-gradient\(135deg,\s*#fff0ec 0%,\s*#ffd9d2 100%\)/);
-  assert.match(soldOutText, /color:\s*#9f2d22/);
-  assert.match(soldOutVisual, /border-color:\s*rgba\(255,\s*107,\s*87,\s*0\.45\)/);
-  assert.match(soldOutVisual, /color:\s*#9f2d22/);
-  assert.match(soldOutLabel, /color:\s*#c93524/);
+  assert.doesNotMatch(css, /@keyframes\s+winner-scroll/);
+  assert.match(compactTicker, /overflow:\s*hidden/);
+  assert.match(compactTrack, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(compactTrack, /height:\s*100%/);
+  assert.match(compactRow, /min-height:\s*0/);
+  assert.doesNotMatch(scrollingTicker, /animation:\s*winner-scroll|transform|will-change:\s*transform/);
+  assert.match(scrollingTicker, /overflow-y:\s*auto/);
+  assert.match(scrollingTicker, /overscroll-behavior:\s*contain/);
+  assert.match(winnerTrack, /display:\s*grid/);
+  assert.match(scrollingTrack, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.doesNotMatch(scrollingTrack, /animation:\s*winner-scroll|transform|will-change:\s*transform/);
+  assert.match(scrollingRow, /min-height:\s*0/);
+  assert.match(block(".winner-employee-id"), /color:\s*var\(--ink\)/);
+  assert.match(block(".winner-ticker.compact-grid .winner-employee-id"), /color:\s*var\(--ink\)/);
 });
 
-test("toast appears as a prominent top-center overlay", () => {
-  const toast = block(".toast");
-  const visibleToast = block(".toast.visible");
+test("visual language is deep blue, restrained, and not the old nine-grid board", () => {
+  const body = block("body");
 
-  assert.match(toast, /top:\s*86px/);
-  assert.match(toast, /left:\s*50%/);
-  assert.match(toast, /z-index:\s*9999/);
-  assert.match(toast, /text-align:\s*center/);
-  assert.match(toast, /background:\s*linear-gradient/);
-  assert.match(toast, /transform:\s*translate\(-50%,\s*-10px\)/);
-  assert.match(visibleToast, /transform:\s*translate\(-50%,\s*0\)/);
-  assert.doesNotMatch(toast, /bottom:\s*72px/);
-  assert.doesNotMatch(toast, /right:\s*24px/);
+  assert.match(body, /background:/);
+  assert.match(css, /--ink:\s*#f7fbff/);
+  assert.match(css, /--accent:\s*#9fd7ff/);
+  assert.doesNotMatch(css, /\.prize-board|\.start-button/);
 });
 
-test("right column can shrink instead of flowing under the footer", () => {
-  const sideColumn = block(".side-column");
-  const recordsPanel = block(".records-panel");
-  const recordsTableWrap = block(".records-table-wrap");
-  const recordsPanelBody = block(".records-panel tbody");
-
-  assert.match(sideColumn, /grid-template-rows:\s*minmax\(0,\s*0\.9fr\)\s*minmax\(0,\s*1\.1fr\)/);
-  assert.match(sideColumn, /overflow:\s*hidden/);
-  assert.match(recordsPanel, /overflow:\s*hidden/);
-  assert.match(recordsTableWrap, /flex:\s*1/);
-  assert.match(recordsTableWrap, /min-height:\s*0/);
-  assert.match(recordsPanelBody, /overflow-y:\s*auto/);
-});
-
-test("result panel content can shrink without clipping the prize prompt", () => {
-  const resultPanel = block(".result-panel");
-  const resultImage = block("#resultImage");
-  const resultPrize = block(".result-prize");
-
-  assert.match(resultPanel, /display:\s*grid/);
-  assert.match(resultPanel, /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto\s+auto/);
-  assert.match(resultImage, /max-height:\s*100%/);
-  assert.match(resultPrize, /font-size:\s*var\(--result-prize-size\)/);
+test("layout defines responsive ratio breakpoints for wide, narrow, and short screens", () => {
+  assert.match(css, /@media\s*\(max-aspect-ratio:\s*4\/3\)/);
+  assert.match(css, /@media\s*\(min-aspect-ratio:\s*18\/9\)/);
+  assert.match(css, /@media\s*\(max-height:\s*760px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*920px\)/);
+  assert.match(css, /@media\s*\(max-height:\s*760px\)[\s\S]*\.prize-showcase\.prize-density-spacious\.prize-count-1\s*\{[\s\S]*grid-auto-rows:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media\s*\(max-height:\s*760px\)[\s\S]*\.prize-showcase\.prize-count-1\s+\.prize-card-hero\s*\{[\s\S]*min-height:\s*clamp\(220px,\s*42vh,\s*320px\)/);
+  assert.match(css, /@media\s*\(max-height:\s*760px\)[\s\S]*\.prize-showcase\.prize-count-1\s+\.prize-card h3\s*\{[\s\S]*font-size:\s*clamp\(38px,\s*5\.4vh,\s*48px\)/);
 });
 
 test("admin dialog keeps a stable height while tab content scrolls", () => {
@@ -117,53 +205,13 @@ test("admin dialog keeps a stable height while tab content scrolls", () => {
   assert.match(adminTableWrap, /overflow:\s*auto/);
 });
 
-test("page layout avoids hard viewport minimums and can scroll on constrained screens", () => {
-  const page = block("html,\nbody");
+test("toast remains a top-center overlay above dialogs", () => {
+  const toast = block(".toast");
+  const visibleToast = block(".toast.visible");
 
-  assert.doesNotMatch(page, /min-width:\s*1120px/);
-  assert.match(page, /min-width:\s*0/);
-  assert.match(css, /body\s*\{[\s\S]*?overflow:\s*auto/);
-});
-
-test("layout defines responsive ratio breakpoints for narrow and short viewports", () => {
-  assert.match(css, /@media\s*\(max-width:\s*1180px\)/);
-  assert.match(css, /@media\s*\(max-height:\s*760px\)/);
-  assert.match(css, /@media\s*\(max-aspect-ratio:\s*4\/3\)/);
-  assert.match(css, /@media\s*\(max-width:\s*920px\)/);
-});
-
-test("main grid and prize cards use adaptive CSS variables", () => {
-  const appShell = block(".app-shell");
-  const mainGrid = block(".main-grid");
-  const prizeBoard = block(".prize-board");
-  const prizeCard = block(".prize-card");
-
-  assert.match(appShell, /padding:\s*var\(--shell-pad-y\)\s+var\(--shell-pad-x\)/);
-  assert.match(appShell, /gap:\s*var\(--shell-gap\)/);
-  assert.match(mainGrid, /grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(var\(--side-column-min\),\s*1fr\)/);
-  assert.match(prizeBoard, /padding:\s*var\(--board-pad\)/);
-  assert.match(prizeBoard, /gap:\s*var\(--board-gap\)/);
-  assert.match(prizeCard, /grid-template-columns:\s*var\(--prize-visual-col\)\s+minmax\(0,\s*var\(--prize-text-col\)\)/);
-});
-
-test("desktop prize card content is centered as an image and text group", () => {
-  const prizeCard = block(".prize-card");
-  const prizeText = block(".prize-card > div:last-child");
-
-  assert.match(css, /--prize-text-col:\s*170px/);
-  assert.match(prizeCard, /justify-content:\s*center/);
-  assert.match(prizeCard, /justify-items:\s*stretch/);
-  assert.match(prizeText, /max-width:\s*var\(--prize-text-col\)/);
-  assert.match(prizeText, /min-width:\s*0/);
-});
-
-test("desktop employee input is width-capped and visually centered", () => {
-  const inputRow = block(".input-row");
-
-  assert.match(css, /--input-max-col:\s*760px/);
-  assert.match(
-    inputRow,
-    /grid-template-columns:\s*var\(--input-label-col\)\s+minmax\(var\(--input-min-col\),\s*var\(--input-max-col\)\)\s+var\(--input-label-col\)/,
-  );
-  assert.match(inputRow, /justify-content:\s*center/);
+  assert.match(toast, /top:\s*72px/);
+  assert.match(toast, /left:\s*50%/);
+  assert.match(toast, /z-index:\s*9999/);
+  assert.match(toast, /text-align:\s*center/);
+  assert.match(visibleToast, /transform:\s*translate\(-50%,\s*0\)/);
 });

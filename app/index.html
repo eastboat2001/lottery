@@ -8,70 +8,65 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
-        <div class="topbar-spacer"></div>
-        <h1 id="activityTitle">活动抽奖</h1>
-        <div class="clock-area">
+      <section class="control-panel" aria-label="抽奖控制台">
+        <div class="topline">
+          <span class="brand-mark" aria-label="AT&S">AT&amp;S</span>
           <div id="clockText" class="clock-text">2026-09-01 10:25:31</div>
+        </div>
+
+        <div class="hero-copy">
+          <p class="eyebrow">活动现场抽奖</p>
+          <h1 id="activityTitle">活动抽奖</h1>
+          <p id="drawStatusText" class="draw-status">待抽奖</p>
+        </div>
+
+        <button id="startButton" class="draw-button" type="button">
+          <span>一键抽奖</span>
+        </button>
+
+        <div class="stats-grid" aria-label="抽奖统计">
+          <div>
+            <span>名单人数</span>
+            <strong id="employeeCount">0</strong>
+          </div>
+          <div>
+            <span>中奖人数</span>
+            <strong id="winnerCount">0</strong>
+          </div>
+        </div>
+
+        <div class="control-footer">
+          <span id="footerActivityTitle">活动名称：活动抽奖</span>
           <button id="adminButton" class="small-button" type="button">管理员功能</button>
         </div>
-      </header>
-
-      <section class="input-row" aria-label="工号输入">
-        <label for="employeeInput">请输入或扫描工号</label>
-        <div class="input-stack">
-          <input id="employeeInput" type="text" autocomplete="off" placeholder="请输入或扫描工号" />
-          <div id="hintText" class="hint-text">工号为7位数字；扫码枪9位编码会自动识别前7位</div>
-        </div>
       </section>
 
-      <section class="main-grid">
-        <div id="prizeBoard" class="prize-board" aria-label="九宫格奖品展示">
-          <article class="prize-card" data-card-index="0"></article>
-          <article class="prize-card" data-card-index="1"></article>
-          <article class="prize-card" data-card-index="2"></article>
-          <article class="prize-card" data-card-index="3"></article>
-          <button id="startButton" class="start-button" type="button">开始<br />抽奖</button>
-          <article class="prize-card" data-card-index="4"></article>
-          <article class="prize-card" data-card-index="5"></article>
-          <article class="prize-card" data-card-index="6"></article>
-          <article class="prize-card" data-card-index="7"></article>
+      <section id="showcasePanel" class="showcase-panel" aria-label="抽奖展示区">
+        <div class="showcase-header">
+          <div>
+            <p class="eyebrow">Showcase</p>
+            <h2 id="showcaseTitle">奖品信息</h2>
+          </div>
+          <p id="showcaseMeta">等待导入名单</p>
         </div>
 
-        <aside class="side-column">
-          <section class="result-panel">
-            <h2 id="resultTitle">抽奖状态</h2>
-            <img id="resultImage" src="../assets/prizes/gift.png" alt="中奖礼盒" hidden />
-            <div id="resultText" class="result-text">等待抽奖</div>
-            <div id="resultPrize" class="result-prize">请扫描工牌或输入工号</div>
-          </section>
+        <div id="prizeShowcase" class="prize-showcase"></div>
 
-          <section class="records-panel">
-            <div class="records-heading">
-              <h2>中奖记录</h2>
-              <span>仅展示最近10条</span>
-            </div>
-            <div class="records-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>工号</th>
-                    <th>奖品</th>
-                    <th>时间</th>
-                  </tr>
-                </thead>
-                <tbody id="recordsBody"></tbody>
-              </table>
-            </div>
-          </section>
-        </aside>
+        <div id="drawAnimation" class="draw-animation" hidden>
+          <div class="animation-orbit">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div>
+            <h3>抽奖中</h3>
+          </div>
+        </div>
+
+        <div id="winnersShowcase" class="winners-showcase" hidden>
+          <div id="winnerTicker" class="winner-ticker"></div>
+        </div>
       </section>
-
-      <footer class="footer-bar">
-        <span id="footerActivityTitle">活动名称：活动抽奖</span>
-        <span id="employeeCount">抽奖名单人数：0 人</span>
-        <span id="participantCount">已参与人数：0 人</span>
-      </footer>
     </main>
 
     <dialog id="adminLoginDialog" class="login-dialog">

@@ -1,46 +1,45 @@
-export const NO_QUALIFICATION_PRIZE = "无抽奖资格";
-export const RUNNING_SPIN_INTERVALS_MS = [24, 29, 34, 26, 32];
-
-export function normalizeEmployeeId(rawInput) {
-  const compact = String(rawInput ?? "").trim().replace(/[\s\r\n\t]+/g, "");
-  if (!compact) {
-    throw new Error("请输入或扫描工号");
+export function drawAllWinners(participants, prizes, random = Math.random, date = new Date()) {
+  const availableParticipants = participants
+    .map((participant) => ({
+      employeeId: String(participant?.employeeId ?? "").trim(),
+      name: String(participant?.name ?? "").trim(),
+    }))
+    .filter((participant) => participant.employeeId && participant.name);
+  if (availableParticipants.length === 0) {
+    throw new Error("请先导入抽奖名单");
   }
-  if (compact.length < 7) {
-    throw new Error("请输入正确的工号");
-  }
 
-  const employeeId = compact.slice(0, 7);
-  if (!/^\d{7}$/.test(employeeId)) {
-    throw new Error("请输入正确的工号");
-  }
-  return employeeId;
-}
-
-export function hasEffectiveWinningRecord(employeeId, records) {
-  return records.some(
-    (record) => record.employeeId === employeeId && record.prizeName !== NO_QUALIFICATION_PRIZE,
-  );
-}
-
-export function selectWeightedPrize(prizes, random = Math.random) {
-  const availablePrizes = prizes.filter((prize) => Number(prize.remainingQty) > 0);
-  if (availablePrizes.length === 0) {
+  const prizeSlots = prizes.flatMap((prize) =>
+    Array.from({ length: Math.max(0, Math.trunc(Number(prize?.remainingQty) || 0)) }, () => ({
+      prizeName: String(prize?.name ?? "").trim(),
+    })),
+  ).filter((slot) => slot.prizeName);
+  if (prizeSlots.length === 0) {
     throw new Error("奖品已抽完");
   }
 
-  const totalWeight = availablePrizes.reduce((sum, prize) => sum + Number(prize.remainingQty), 0);
-  const ticket = Math.floor(random() * totalWeight) + 1;
-  let cumulative = 0;
+  const shuffledParticipants = shuffle(availableParticipants, random);
+  const shuffledSlots = shuffle(prizeSlots, random);
+  const winnerCount = Math.min(shuffledParticipants.length, shuffledSlots.length);
+  const time = formatNow(date);
+  const records = Array.from({ length: winnerCount }, (_, index) => ({
+    employeeId: shuffledParticipants[index].employeeId,
+    name: shuffledParticipants[index].name,
+    prizeName: shuffledSlots[index].prizeName,
+    time,
+  }));
+  const awardedCounts = records.reduce((counts, record) => {
+    counts.set(record.prizeName, (counts.get(record.prizeName) || 0) + 1);
+    return counts;
+  }, new Map());
 
-  for (const prize of availablePrizes) {
-    cumulative += Number(prize.remainingQty);
-    if (ticket <= cumulative) {
-      return prize;
-    }
-  }
-
-  return availablePrizes.at(-1);
+  return {
+    records,
+    prizes: prizes.map((prize) => ({
+      ...prize,
+      remainingQty: Math.max(0, Math.trunc(Number(prize.remainingQty) || 0) - (awardedCounts.get(prize.name) || 0)),
+    })),
+  };
 }
 
 export function formatNow(date = new Date()) {
@@ -58,4 +57,13 @@ export function formatNow(date = new Date()) {
     ":",
     pad(date.getSeconds()),
   ].join("");
+}
+
+function shuffle(values, random) {
+  const shuffled = values.map((value) => ({ ...value }));
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const target = index - Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
 }

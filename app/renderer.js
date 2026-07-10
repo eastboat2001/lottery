@@ -1,47 +1,146 @@
-const NO_QUALIFICATION_PRIZE = "无抽奖资格";
-const RUNNING_SPIN_INTERVALS_MS = [24, 29, 34, 26, 32];
-const CLOCKWISE_PRIZE_CARD_INDEXES = [0, 1, 2, 4, 7, 6, 5, 3];
+const STORAGE_KEY = "activity-lottery-batch-state-v1";
+const DEFAULT_ADMIN_PASSWORD = "123456";
+const DEFAULT_ACTIVITY_TITLE = "活动抽奖";
+const LOCAL_CONFIG_LABEL = "浏览器本地存储";
+const MIN_PRIZE_COUNT = 1;
+const MAX_PRIZE_COUNT = 12;
+const DRAW_ANIMATION_MS = 1600;
+const COMPACT_WINNER_GRID_LIMIT = 36;
 
-function normalizeEmployeeId(rawInput) {
-  const compact = String(rawInput ?? "").trim().replace(/[\s\r\n\t]+/g, "");
-  if (!compact) {
-    throw new Error("请输入或扫描工号");
-  }
-  if (compact.length < 7) {
-    throw new Error("请输入正确的工号");
-  }
+const DEFAULT_PRIZES = [
+  { name: "全勤参与奖", description: "50元小卖部卡", remainingQty: 36, imagePath: "", imageUrl: "" },
+];
 
-  const employeeId = compact.slice(0, 7);
-  if (!/^\d{7}$/.test(employeeId)) {
-    throw new Error("请输入正确的工号");
-  }
-  return employeeId;
+function createDefaultSnapshot(overrides = {}) {
+  return normalizeSnapshot({
+    workbookPath: LOCAL_CONFIG_LABEL,
+    configPath: LOCAL_CONFIG_LABEL,
+    adminPassword: DEFAULT_ADMIN_PASSWORD,
+    activityTitle: DEFAULT_ACTIVITY_TITLE,
+    participants: [],
+    prizes: DEFAULT_PRIZES,
+    records: [],
+    ...overrides,
+  });
 }
 
-function hasEffectiveWinningRecord(employeeId, records) {
-  return records.some(
-    (record) => record.employeeId === employeeId && record.prizeName !== NO_QUALIFICATION_PRIZE,
-  );
+function normalizeSnapshot(snapshot = {}) {
+  return {
+    workbookPath: LOCAL_CONFIG_LABEL,
+    configPath: LOCAL_CONFIG_LABEL,
+    adminPassword: normalizeAdminPassword(snapshot.adminPassword),
+    activityTitle: normalizeActivityTitleValue(snapshot.activityTitle),
+    participants: normalizeParticipants(snapshot.participants),
+    prizes: normalizePrizes(snapshot.prizes),
+    records: normalizeRecords(snapshot.records),
+  };
 }
 
-function selectWeightedPrize(prizes, random = Math.random) {
-  const availablePrizes = prizes.filter((prize) => Number(prize.remainingQty) > 0);
-  if (availablePrizes.length === 0) {
+function normalizePrizes(prizes) {
+  const seen = new Set();
+
+  return ensureArray(prizes)
+    .map((prize) => ({
+      name: String(prize?.name ?? "").trim(),
+      description: String(prize?.description ?? "").trim(),
+      remainingQty: Math.max(0, Math.trunc(Number(prize?.remainingQty) || 0)),
+      imagePath: String(prize?.imagePath ?? "").trim(),
+      imageUrl: String(prize?.imageUrl ?? "").trim(),
+    }))
+    .filter((prize) => prize.name)
+    .filter((prize) => {
+      if (seen.has(prize.name)) {
+        return false;
+      }
+      seen.add(prize.name);
+      return true;
+    })
+    .slice(0, MAX_PRIZE_COUNT);
+}
+
+function participantsFromWorkbook(workbook, XLSX) {
+  if (!workbook?.SheetNames?.length) {
+    throw new Error("抽奖名单文件中没有可读取的工作表");
+  }
+
+  const sheetName = workbook.Sheets["抽奖名单"] ? "抽奖名单" : workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+  const header = rows[0] || [];
+  const nameColumnIndex = header.findIndex((cell) => String(cell ?? "").trim() === "姓名");
+  const employeeColumnIndex = header.findIndex((cell) => String(cell ?? "").trim() === "工号");
+
+  if (nameColumnIndex < 0 || employeeColumnIndex < 0) {
+    throw new Error("导入名单必须同时包含“姓名”和“工号”列");
+  }
+
+  const participants = rows
+    .slice(1)
+    .map((row) => ({
+      name: normalizeParticipantName(row[nameColumnIndex]),
+      employeeId: normalizeImportedEmployeeId(row[employeeColumnIndex]),
+    }))
+    .filter((participant) => participant.employeeId && participant.name);
+
+  const uniqueParticipants = uniqueParticipantsByEmployeeId(participants);
+  if (uniqueParticipants.length === 0) {
+    throw new Error("导入名单中没有可用的姓名和7位工号");
+  }
+
+  return uniqueParticipants;
+}
+
+function winningRows(records) {
+  return [
+    ["姓名", "工号", "奖品", "时间"],
+    ...normalizeRecords(records).map((record) => [record.name, record.employeeId, record.prizeName, record.time]),
+  ];
+}
+
+function drawAllWinners(participants, prizes, random = Math.random, date = new Date()) {
+  const availableParticipants = participants
+    .map((participant) => ({
+      employeeId: String(participant?.employeeId ?? "").trim(),
+      name: String(participant?.name ?? "").trim(),
+    }))
+    .filter((participant) => participant.employeeId && participant.name);
+  if (availableParticipants.length === 0) {
+    throw new Error("请先导入抽奖名单");
+  }
+
+  const prizeSlots = prizes
+    .flatMap((prize) =>
+      Array.from({ length: Math.max(0, Math.trunc(Number(prize?.remainingQty) || 0)) }, () => ({
+        prizeName: String(prize?.name ?? "").trim(),
+      })),
+    )
+    .filter((slot) => slot.prizeName);
+  if (prizeSlots.length === 0) {
     throw new Error("奖品已抽完");
   }
 
-  const totalWeight = availablePrizes.reduce((sum, prize) => sum + Number(prize.remainingQty), 0);
-  const ticket = Math.floor(random() * totalWeight) + 1;
-  let cumulative = 0;
+  const shuffledParticipants = shuffle(availableParticipants, random);
+  const shuffledSlots = shuffle(prizeSlots, random);
+  const winnerCount = Math.min(shuffledParticipants.length, shuffledSlots.length);
+  const time = formatNow(date);
+  const records = Array.from({ length: winnerCount }, (_, index) => ({
+    employeeId: shuffledParticipants[index].employeeId,
+    name: shuffledParticipants[index].name,
+    prizeName: shuffledSlots[index].prizeName,
+    time,
+  }));
+  const awardedCounts = records.reduce((counts, record) => {
+    counts.set(record.prizeName, (counts.get(record.prizeName) || 0) + 1);
+    return counts;
+  }, new Map());
 
-  for (const prize of availablePrizes) {
-    cumulative += Number(prize.remainingQty);
-    if (ticket <= cumulative) {
-      return prize;
-    }
-  }
-
-  return availablePrizes.at(-1);
+  return {
+    records,
+    prizes: prizes.map((prize) => ({
+      ...prize,
+      remainingQty: Math.max(0, Math.trunc(Number(prize.remainingQty) || 0) - (awardedCounts.get(prize.name) || 0)),
+    })),
+  };
 }
 
 function formatNow(date = new Date()) {
@@ -61,108 +160,45 @@ function formatNow(date = new Date()) {
   ].join("");
 }
 
-const STORAGE_KEY = "ehs-lottery-static-state-v1";
-const DEFAULT_ADMIN_PASSWORD = "123456";
-const DEFAULT_ACTIVITY_TITLE = "活动抽奖";
-const LOCAL_CONFIG_LABEL = "浏览器本地存储";
-const MAX_PRIZE_COUNT = 8;
-
-const DEFAULT_PRIZES = [
-  { name: "小风扇", remainingQty: 30, imagePath: "fan.png", imageUrl: "../assets/prizes/fan.png" },
-  { name: "指甲刀套装", remainingQty: 30, imagePath: "nail_kit.png", imageUrl: "../assets/prizes/nail_kit.png" },
-  { name: "天堂伞", remainingQty: 30, imagePath: "umbrella.png", imageUrl: "../assets/prizes/umbrella.png" },
-  { name: "护手霜", remainingQty: 30, imagePath: "hand_cream.png", imageUrl: "../assets/prizes/hand_cream.png" },
-  { name: "冰袖", remainingQty: 30, imagePath: "sleeves.png", imageUrl: "../assets/prizes/sleeves.png" },
-  { name: "休闲书包", remainingQty: 30, imagePath: "backpack.png", imageUrl: "../assets/prizes/backpack.png" },
-  { name: "软抽纸面巾", remainingQty: 30, imagePath: "tissue.png", imageUrl: "../assets/prizes/tissue.png" },
-  { name: "10元小卖部购物券", remainingQty: 4600, imagePath: "coupon.png", imageUrl: "../assets/prizes/coupon.png" },
-];
-
-function createDefaultSnapshot(overrides = {}) {
-  return normalizeSnapshot({
-    workbookPath: LOCAL_CONFIG_LABEL,
-    configPath: LOCAL_CONFIG_LABEL,
-    adminPassword: DEFAULT_ADMIN_PASSWORD,
-    activityTitle: DEFAULT_ACTIVITY_TITLE,
-    employeeIds: [],
-    prizes: DEFAULT_PRIZES,
-    records: [],
-    ...overrides,
-  });
+function shuffle(values, random) {
+  const shuffled = values.map((value) => ({ ...value }));
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const target = index - Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
 }
 
-function normalizeSnapshot(snapshot = {}) {
-  const employeeIds = uniqueValues(
-    ensureArray(snapshot.employeeIds)
-      .map((employeeId) => normalizeImportedEmployeeId(employeeId))
-      .filter(Boolean),
+function normalizeParticipants(participants) {
+  return uniqueParticipantsByEmployeeId(
+    ensureArray(participants)
+      .map((participant) => ({
+        employeeId: normalizeImportedEmployeeId(participant?.employeeId),
+        name: normalizeParticipantName(participant?.name),
+      }))
+      .filter((participant) => participant.employeeId && participant.name),
   );
-
-  return {
-    workbookPath: LOCAL_CONFIG_LABEL,
-    configPath: LOCAL_CONFIG_LABEL,
-    adminPassword: normalizeAdminPassword(snapshot.adminPassword),
-    activityTitle: normalizeActivityTitleValue(snapshot.activityTitle),
-    employeeIds,
-    prizes: normalizePrizes(snapshot.prizes),
-    records: normalizeRecords(snapshot.records),
-  };
 }
 
-function normalizePrizes(prizes) {
-  const seen = new Set();
-
-  return ensureArray(prizes)
-    .map((prize) => ({
-      name: String(prize?.name ?? "").trim(),
-      remainingQty: Math.max(0, Math.trunc(Number(prize?.remainingQty) || 0)),
-      imagePath: String(prize?.imagePath ?? "").trim(),
-      imageUrl: String(prize?.imageUrl ?? "").trim(),
+function normalizeRecords(records) {
+  return ensureArray(records)
+    .map((record) => ({
+      employeeId: normalizeImportedEmployeeId(record?.employeeId),
+      name: normalizeParticipantName(record?.name),
+      prizeName: String(record?.prizeName ?? "").trim(),
+      time: String(record?.time ?? "").trim(),
     }))
-    .filter((prize) => prize.name)
-    .filter((prize) => {
-      if (seen.has(prize.name)) {
-        return false;
-      }
-      seen.add(prize.name);
-      return true;
-    })
-    .slice(0, MAX_PRIZE_COUNT);
+    .filter((record) => record.employeeId && record.prizeName);
 }
 
-function employeeIdsFromWorkbook(workbook, XLSX) {
-  if (!workbook?.SheetNames?.length) {
-    throw new Error("抽奖名单文件中没有可读取的工作表");
-  }
-
-  const sheetName = workbook.Sheets["抽奖名单"] ? "抽奖名单" : workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-  const header = rows[0] || [];
-  const employeeColumnIndex = header.findIndex((cell) => String(cell ?? "").trim() === "工号");
-
-  if (employeeColumnIndex < 0) {
-    throw new Error("导入名单必须包含“工号”列");
-  }
-
-  const employeeIds = rows
-    .slice(1)
-    .map((row) => normalizeImportedEmployeeId(row[employeeColumnIndex]))
-    .filter(Boolean);
-
-  const uniqueEmployeeIds = uniqueValues(employeeIds);
-  if (uniqueEmployeeIds.length === 0) {
-    throw new Error("导入名单中没有可用的7位工号");
-  }
-
-  return uniqueEmployeeIds;
+function normalizeImportedEmployeeId(value) {
+  const text = String(value ?? "").trim().replace(/[\s\r\n\t]+/g, "");
+  const employeeId = text.slice(0, 7);
+  return /^\d{7}$/.test(employeeId) ? employeeId : "";
 }
 
-function winningRows(records) {
-  return [
-    ["工号", "奖品", "时间"],
-    ...normalizeRecords(records).map((record) => [record.employeeId, record.prizeName, record.time]),
-  ];
+function normalizeParticipantName(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
 }
 
 function normalizeActivityTitleValue(value) {
@@ -175,28 +211,19 @@ function normalizeAdminPassword(value) {
   return password || DEFAULT_ADMIN_PASSWORD;
 }
 
-function normalizeRecords(records) {
-  return ensureArray(records)
-    .map((record) => ({
-      employeeId: normalizeImportedEmployeeId(record?.employeeId),
-      prizeName: String(record?.prizeName ?? "").trim(),
-      time: String(record?.time ?? "").trim(),
-    }))
-    .filter((record) => record.employeeId && record.prizeName && record.prizeName !== NO_QUALIFICATION_PRIZE);
-}
-
-function normalizeImportedEmployeeId(value) {
-  const text = String(value ?? "").trim().replace(/[\s\r\n\t]+/g, "");
-  const employeeId = text.slice(0, 7);
-  return /^\d{7}$/.test(employeeId) ? employeeId : "";
+function uniqueParticipantsByEmployeeId(participants) {
+  const seen = new Set();
+  return participants.filter((participant) => {
+    if (seen.has(participant.employeeId)) {
+      return false;
+    }
+    seen.add(participant.employeeId);
+    return true;
+  });
 }
 
 function ensureArray(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function uniqueValues(values) {
-  return [...new Set(values)];
 }
 
 const elements = {
@@ -207,21 +234,22 @@ const elements = {
   adminPasswordInput: document.querySelector("#adminPasswordInput"),
   loginSubmitButton: document.querySelector("#loginSubmitButton"),
   clockText: document.querySelector("#clockText"),
-  employeeInput: document.querySelector("#employeeInput"),
-  hintText: document.querySelector("#hintText"),
+  drawStatusText: document.querySelector("#drawStatusText"),
   dataStatus: document.querySelector("#dataStatus"),
   importButton: document.querySelector("#importButton"),
   exportButton: document.querySelector("#exportButton"),
   refreshButton: document.querySelector("#refreshButton"),
   adminButton: document.querySelector("#adminButton"),
   startButton: document.querySelector("#startButton"),
-  prizeCards: [...document.querySelectorAll(".prize-card")],
-  resultImage: document.querySelector("#resultImage"),
-  resultTitle: document.querySelector("#resultTitle"),
-  resultText: document.querySelector("#resultText"),
-  resultPrize: document.querySelector("#resultPrize"),
-  recordsBody: document.querySelector("#recordsBody"),
+  showcasePanel: document.querySelector("#showcasePanel"),
+  showcaseTitle: document.querySelector("#showcaseTitle"),
+  showcaseMeta: document.querySelector("#showcaseMeta"),
+  prizeShowcase: document.querySelector("#prizeShowcase"),
+  winnersShowcase: document.querySelector("#winnersShowcase"),
+  winnerTicker: document.querySelector("#winnerTicker"),
+  drawAnimation: document.querySelector("#drawAnimation"),
   employeeCount: document.querySelector("#employeeCount"),
+  winnerCount: document.querySelector("#winnerCount"),
   participantCount: document.querySelector("#participantCount"),
   adminDialog: document.querySelector("#adminDialog"),
   workbookPathText: document.querySelector("#workbookPathText"),
@@ -238,22 +266,16 @@ const state = {
   snapshot: createConfiguredDefaultSnapshot(),
   prizeDrafts: [],
   pendingPrizeImageIndex: -1,
-  activeEmployeeId: "",
-  activeIndex: -1,
-  scanTimer: 0,
+  pendingDrawResult: null,
   animationTimer: 0,
-  spinDelayIndex: 0,
-  stopTargetIndex: -1,
-  pendingPrizeName: "",
   running: false,
-  slowing: false,
   adminTab: "employees",
 };
 
 bindEvents();
-applyActivityTitle(configuredDefaultActivityTitle());
-startClock();
 loadData({ silent: true });
+updateClock();
+window.setInterval(updateClock, 1000);
 
 function bindEvents() {
   elements.importButton.addEventListener("click", openWorkbook);
@@ -275,50 +297,7 @@ function bindEvents() {
   elements.adminTableWrap.addEventListener("pointerdown", handleAdminEditablePointer);
   elements.adminTableWrap.addEventListener("input", handleAdminTableInput);
   elements.adminTableWrap.addEventListener("click", handleAdminTableClick);
-  elements.startButton.addEventListener("click", () => {
-    if (state.running) {
-      requestStopDraw();
-      return;
-    }
-    startDraw();
-  });
-
-  elements.employeeInput.addEventListener("input", () => {
-    if (state.running) {
-      return;
-    }
-    clearTimeout(state.scanTimer);
-    const compact = elements.employeeInput.value.replace(/\s+/g, "");
-    if (compact.length >= 9) {
-      state.scanTimer = window.setTimeout(startDraw, 180);
-    }
-  });
-
-  elements.employeeInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") {
-      return;
-    }
-    event.preventDefault();
-    if (state.running) {
-      return;
-    }
-    startDraw();
-  });
-
-  window.addEventListener("keydown", (event) => {
-    if (!state.running) {
-      return;
-    }
-    if (event.key === " " && !isAdminSurfaceOpen()) {
-      event.preventDefault();
-      requestStopDraw();
-      return;
-    }
-    if (event.key !== "Enter") {
-      return;
-    }
-    event.preventDefault();
-  });
+  elements.startButton.addEventListener("click", startBatchDraw);
 
   for (const button of elements.tabButtons) {
     button.addEventListener("click", () => {
@@ -332,14 +311,11 @@ function loadData(options = {}) {
   try {
     const snapshot = readSnapshotFromStorage();
     applySnapshot(snapshot);
-    setResult("等待抽奖", "请扫描工牌或输入工号", "../assets/prizes/gift.png");
     if (!options.silent) {
       showToast("数据已刷新");
     }
   } catch (error) {
     showToast(error.message || String(error));
-  } finally {
-    resetInput();
   }
 }
 
@@ -358,16 +334,14 @@ async function handleRosterFileChange(event) {
     const XLSX = ensureXlsx();
     const buffer = await readFileAsArrayBuffer(file);
     const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-    const employeeIds = employeeIdsFromWorkbook(workbook, XLSX);
-    const snapshot = saveSnapshot({ ...state.snapshot, employeeIds });
+    const participants = participantsFromWorkbook(workbook, XLSX);
+    const snapshot = saveSnapshot({ ...state.snapshot, participants, records: [] });
     applySnapshot(snapshot);
-    setResult("等待抽奖", "请扫描工牌或输入工号", "../assets/prizes/gift.png");
-    showToast(`抽奖名单已导入：${employeeIds.length} 人`);
+    showToast(`抽奖名单已导入：${participants.length} 人`);
   } catch (error) {
     showToast(error.message || String(error));
   } finally {
     event.target.value = "";
-    resetInput();
   }
 }
 
@@ -377,6 +351,9 @@ function resetAllData() {
   }
 
   try {
+    window.clearTimeout(state.animationTimer);
+    state.running = false;
+    state.pendingDrawResult = null;
     const snapshot = saveSnapshot(
       createDefaultSnapshot({
         adminPassword: configuredAdminPassword(),
@@ -384,12 +361,9 @@ function resetAllData() {
       }),
     );
     applySnapshot(snapshot);
-    setResult("等待抽奖", "请扫描工牌或输入工号", "../assets/prizes/gift.png");
     showToast("数据已重置");
   } catch (error) {
     showToast(error.message || String(error));
-  } finally {
-    resetInput();
   }
 }
 
@@ -412,154 +386,58 @@ function exportRecords() {
   }
 }
 
-async function startDraw() {
+function startBatchDraw() {
   if (state.running) {
     return;
   }
-
-  let employeeId;
-  try {
-    employeeId = normalizeEmployeeId(elements.employeeInput.value);
-  } catch (error) {
-    setResult("提示", error.message, "../assets/prizes/gift.png");
-    showToast(error.message);
-    resetInput();
-    return;
-  }
-
-  const employeeSet = new Set(state.snapshot.employeeIds);
-  if (!employeeSet.has(employeeId)) {
-    await recordIneligible(employeeId);
-    return;
-  }
-
-  if (hasEffectiveWinningRecord(employeeId, state.snapshot.records)) {
-    setResult("提示", "您已参与过抽奖，不能重复参加", "../assets/prizes/gift.png");
-    showToast("您已参与过抽奖，不能重复参加");
-    resetInput();
-    return;
-  }
-
-  if (!state.snapshot.prizes.some((prize) => Number(prize.remainingQty) > 0)) {
-    setResult("提示", "奖品已抽完", "../assets/prizes/gift.png");
-    showToast("奖品已抽完");
-    resetInput();
-    return;
-  }
-
-  state.activeEmployeeId = employeeId;
-  state.running = true;
-  state.slowing = false;
-  state.pendingPrizeName = "";
-  state.stopTargetIndex = -1;
-  state.spinDelayIndex = 0;
-  elements.employeeInput.disabled = true;
-  elements.startButton.disabled = false;
-  elements.startButton.innerHTML = "停止<br />抽奖";
-  elements.hintText.textContent = `当前工号：${employeeId}，点击停止按钮或按空格结束抽奖`;
-  setResult("抽奖中", "点击停止或按空格公布结果", "../assets/prizes/gift.png");
-  clearWinnerMarks();
-  advanceHighlight();
-  scheduleNextHighlight(RUNNING_SPIN_INTERVALS_MS[0]);
-}
-
-async function recordIneligible(employeeId) {
-  setResult("提示", "您未按时完成答题，无法参与抽奖", "../assets/prizes/gift.png");
-  showToast("您未按时完成答题，无法参与抽奖");
-  resetInput();
-}
-
-async function requestStopDraw() {
-  if (!state.running || state.slowing || !state.activeEmployeeId) {
+  if (state.snapshot.records.length > 0) {
+    setDrawStatus("已完成");
+    showToast("请先重置数据");
     return;
   }
 
   try {
-    const selectedPrize = selectWeightedPrize(state.snapshot.prizes);
-    state.pendingPrizeName = selectedPrize.name;
-    state.stopTargetIndex = state.snapshot.prizes
-      .slice(0, elements.prizeCards.length)
-      .findIndex((prize) => prize.name === selectedPrize.name);
-    state.slowing = true;
+    state.pendingDrawResult = drawAllWinners(state.snapshot.participants, state.snapshot.prizes);
+    state.running = true;
     elements.startButton.disabled = true;
-    elements.startButton.innerHTML = "开奖<br />中";
-    elements.hintText.textContent = "正在公布抽奖结果";
-    await finalizeStoppedDraw();
+    elements.startButton.innerHTML = "<span>抽奖中</span>";
+    setDrawStatus("抽奖中");
+    renderDrawingAnimation();
+    window.clearTimeout(state.animationTimer);
+    state.animationTimer = window.setTimeout(finalizeBatchDraw, DRAW_ANIMATION_MS);
   } catch (error) {
-    finishRunningState();
-    setResult("提示", error.message || String(error), "../assets/prizes/gift.png");
-    showToast(error.message || String(error));
+    const message = compactDrawErrorMessage(error.message || String(error));
+    setDrawStatus(message);
+    showToast(message);
   }
 }
 
-async function runHighlightFrame() {
-  if (!state.running) {
+function finalizeBatchDraw() {
+  if (!state.running || !state.pendingDrawResult) {
     return;
   }
-  if (state.slowing) {
-    return;
-  }
-
-  advanceHighlight();
-
-  state.spinDelayIndex += 1;
-  scheduleNextHighlight(RUNNING_SPIN_INTERVALS_MS[state.spinDelayIndex % RUNNING_SPIN_INTERVALS_MS.length]);
-}
-
-function scheduleNextHighlight(delay) {
-  window.clearTimeout(state.animationTimer);
-  state.animationTimer = window.setTimeout(runHighlightFrame, delay);
-}
-
-async function finalizeStoppedDraw() {
-  if (!state.running || !state.activeEmployeeId || !state.pendingPrizeName) {
-    return;
-  }
-
-  window.clearTimeout(state.animationTimer);
-  const employeeId = state.activeEmployeeId;
-  const prizeName = state.pendingPrizeName;
 
   try {
-    const nextPrizes = state.snapshot.prizes.map((prize) => {
-      if (prize.name !== prizeName) {
-        return prize;
-      }
-      return { ...prize, remainingQty: Math.max(0, Number(prize.remainingQty) - 1) };
-    });
     const snapshot = saveSnapshot({
       ...state.snapshot,
-      prizes: nextPrizes,
-      records: [
-        ...state.snapshot.records,
-        { employeeId, prizeName, time: formatNow() },
-      ],
+      prizes: state.pendingDrawResult.prizes,
+      records: state.pendingDrawResult.records,
     });
+    state.running = false;
+    state.pendingDrawResult = null;
+    state.animationTimer = 0;
+    elements.startButton.disabled = false;
     applySnapshot(snapshot);
-    const resultPrize = snapshot.prizes.find((prize) => prize.name === prizeName) || { name: prizeName, imageUrl: "" };
-    finishRunningState();
-    setResult("恭喜您抽中", resultPrize.name, prizeImage(resultPrize));
-    markWinner(resultPrize.name);
+    showToast(`抽奖完成：${snapshot.records.length} 人中奖`);
   } catch (error) {
-    finishRunningState();
+    state.running = false;
+    state.pendingDrawResult = null;
+    state.animationTimer = 0;
+    elements.startButton.disabled = false;
     loadData({ silent: true });
-    setResult("提示", error.message || String(error), "../assets/prizes/gift.png");
+    setDrawStatus(error.message || String(error));
     showToast(error.message || String(error));
   }
-}
-
-function finishRunningState() {
-  window.clearTimeout(state.animationTimer);
-  state.animationTimer = 0;
-  state.running = false;
-  state.slowing = false;
-  state.activeEmployeeId = "";
-  state.pendingPrizeName = "";
-  state.stopTargetIndex = -1;
-  elements.employeeInput.disabled = false;
-  elements.startButton.disabled = false;
-  elements.startButton.innerHTML = "开始<br />抽奖";
-  resetInput();
 }
 
 function applySnapshot(snapshot) {
@@ -569,66 +447,190 @@ function applySnapshot(snapshot) {
   });
   state.prizeDrafts = state.snapshot.prizes.map((prize) => ({ ...prize }));
   applyActivityTitle(state.snapshot.activityTitle);
-  renderPrizes();
-  renderRecords();
+  renderStage();
   renderStats();
   renderAdminDialog();
 }
 
-function renderPrizes() {
-  const visiblePrizes = state.snapshot.prizes.slice(0, elements.prizeCards.length);
-  for (const [index, card] of elements.prizeCards.entries()) {
-    const prize = visiblePrizes[index];
-    card.classList.remove("active", "winner", "sold-out", "empty");
-    if (!prize) {
-      card.classList.add("empty");
-      card.innerHTML = `<div></div><div><h3>待配置</h3></div>`;
-      continue;
-    }
-    if (Number(prize.remainingQty) <= 0) {
-      card.classList.add("sold-out");
-      card.innerHTML = `
-        <div class="prize-text-visual">已抽完</div>
-        <div>
-          <h3>${escapeHtml(prize.name)}</h3>
-          <p class="sold-out-label">已抽完</p>
-        </div>
-      `;
-      continue;
-    }
-    card.innerHTML = `
-      ${renderPrizeVisual(prize)}
-      <div>
-        <h3>${escapeHtml(prize.name)}</h3>
-      </div>
-    `;
+function renderStage() {
+  if (state.running) {
+    renderDrawingAnimation();
+    return;
   }
+  if (state.snapshot.records.length > 0) {
+    renderWinners();
+    return;
+  }
+  renderPrizes();
 }
 
-function renderRecords() {
-  const rows = state.snapshot.records.slice(-10).reverse();
-  elements.recordsBody.innerHTML = rows
-    .map((record) => {
-      const className = record.prizeName === NO_QUALIFICATION_PRIZE ? "ineligible" : "";
-      return `
-        <tr class="${className}">
-          <td>${escapeHtml(record.employeeId)}</td>
-          <td>${escapeHtml(record.prizeName)}</td>
-          <td>${escapeHtml(record.time)}</td>
-        </tr>
-      `;
-    })
+function renderPrizes() {
+  resetWinnerScrollPosition();
+  const prizeCount = state.snapshot.prizes.length;
+  elements.showcasePanel.classList.remove("showing-winners", "drawing");
+  elements.prizeShowcase.className = `prize-showcase ${prizeDensityClass(prizeCount)} prize-count-${Math.min(
+    Math.max(prizeCount, 0),
+    MAX_PRIZE_COUNT,
+  )}`;
+  elements.prizeShowcase.hidden = false;
+  elements.winnersShowcase.hidden = true;
+  elements.drawAnimation.hidden = true;
+  elements.showcaseTitle.textContent = "奖品信息";
+  elements.showcaseMeta.textContent = `${state.snapshot.prizes.length} 类奖品 · 共 ${availablePrizeCount()} 个名额`;
+  setDrawStatus(state.snapshot.participants.length ? "待抽奖" : "请导入名单");
+
+  elements.prizeShowcase.innerHTML = state.snapshot.prizes.length
+    ? state.snapshot.prizes.map((prize) => renderPrizeCard(prize)).join("")
+    : `<div class="empty-state">请在管理员功能中配置奖品</div>`;
+  updateStartButton();
+}
+
+function prizeDensityClass(prizeCount) {
+  if (prizeCount <= 6) {
+    return "prize-density-spacious";
+  }
+  if (prizeCount >= 10) {
+    return "prize-density-compact";
+  }
+  return "prize-density-standard";
+}
+
+function renderDrawingAnimation() {
+  resetWinnerScrollPosition();
+  elements.showcasePanel.classList.remove("showing-winners");
+  elements.showcasePanel.classList.add("drawing");
+  elements.prizeShowcase.hidden = true;
+  elements.winnersShowcase.hidden = true;
+  elements.drawAnimation.hidden = false;
+  elements.showcaseTitle.textContent = "抽奖中";
+  elements.showcaseMeta.textContent = "";
+}
+
+function renderWinners() {
+  const records = state.snapshot.records;
+  resetWinnerScrollPosition();
+  elements.showcasePanel.classList.remove("drawing");
+  elements.showcasePanel.classList.add("showing-winners");
+  elements.prizeShowcase.hidden = true;
+  elements.winnersShowcase.hidden = false;
+  elements.drawAnimation.hidden = true;
+  elements.showcaseTitle.textContent = "中奖名单";
+  elements.showcaseMeta.textContent = `${records.length} 位中奖者 · ${uniquePrizeCount(records)} 类奖品`;
+  setDrawStatus("抽奖已完成");
+  elements.winnerTicker.classList.toggle("compact-grid", records.length > 0 && records.length <= COMPACT_WINNER_GRID_LIMIT);
+  elements.winnerTicker.classList.toggle("scrolling", records.length > COMPACT_WINNER_GRID_LIMIT);
+  const winnerRows = records
+    .map(
+      (record, index) => `
+          <article class="winner-row">
+            <span class="winner-index">${String(index + 1).padStart(2, "0")}</span>
+            <strong>${escapeHtml(record.name || "未命名")}</strong>
+            <span class="winner-employee-id">${escapeHtml(record.employeeId)}</span>
+            <em>${escapeHtml(record.prizeName)}</em>
+          </article>
+        `,
+    )
     .join("");
+  elements.winnerTicker.innerHTML = `<div class="winner-track">${winnerRows}</div>`;
+  updateStartButton();
+}
+
+function resetWinnerScrollPosition() {
+  elements.winnerTicker.scrollTop = 0;
+}
+
+function renderPrizeCard(prize) {
+  const remainingQty = Number(prize.remainingQty) || 0;
+  const soldOut = remainingQty <= 0;
+  const description = String(prize.description || "").trim();
+  const certificate = prizeCertificateDetails(prize);
+  const imageSrc = prizeImage(prize);
+  return `
+    <article class="prize-card ${soldOut ? "sold-out" : ""}">
+      <div class="prize-card-hero">
+        <div class="prize-stage-rings" aria-hidden="true"></div>
+        <div class="prize-certificate ${imageSrc ? "has-image" : ""}">
+          ${
+            imageSrc
+              ? `<img class="prize-certificate-image" src="${escapeAttribute(imageSrc)}" alt="${escapeAttribute(
+                  prize.name || "奖品图片",
+                )}" />`
+              : `
+                <span class="prize-certificate-label">${escapeHtml(certificate.label)}</span>
+                <span class="prize-certificate-amount">${escapeHtml(certificate.amount)}</span>
+                <span class="prize-certificate-unit">${escapeHtml(certificate.unit)}</span>
+                <span class="prize-certificate-type">${escapeHtml(certificate.type)}</span>
+                <span class="prize-certificate-icon" aria-hidden="true"></span>
+              `
+          }
+        </div>
+        <div class="prize-stage-base" aria-hidden="true"></div>
+      </div>
+      <div class="prize-info">
+        <h3>${escapeHtml(prize.name)}</h3>
+        ${description ? `<p class="prize-description">${escapeHtml(description)}</p>` : ""}
+        <p class="prize-quota">${soldOut ? "已抽完" : `${remainingQty} 个名额`}</p>
+      </div>
+    </article>
+  `;
+}
+
+function prizeCertificateDetails(prize) {
+  const name = String(prize?.name || "奖品").trim();
+  const description = String(prize?.description || "").trim();
+  const amountMatch = description.match(/(\d+(?:\.\d+)?)\s*元/);
+  if (!amountMatch) {
+    return {
+      label: name,
+      amount: description || name,
+      unit: "",
+      type: "礼品",
+    };
+  }
+
+  const type = description.replace(amountMatch[0], "").trim() || name;
+  return {
+    label: type.replace(/卡$/, "") || name,
+    amount: amountMatch[1],
+    unit: "元",
+    type,
+  };
 }
 
 function renderStats() {
-  const participantCount = state.snapshot.records.filter(
-    (record) => record.prizeName !== NO_QUALIFICATION_PRIZE,
-  ).length;
-  elements.employeeCount.textContent = `抽奖名单人数：${state.snapshot.employeeIds.length} 人`;
-  elements.participantCount.textContent = `已参与人数：${participantCount} 人`;
-  elements.dataStatus.textContent = `已导入名单：${state.snapshot.employeeIds.length} 人  |  中奖记录：${state.snapshot.records.length} 条`;
+  elements.employeeCount.textContent = String(state.snapshot.participants.length);
+  if (elements.participantCount) {
+    elements.participantCount.textContent = `抽奖名单人数：${state.snapshot.participants.length} 人`;
+  }
+  elements.winnerCount.textContent = String(state.snapshot.records.length);
+  elements.dataStatus.textContent = `已导入名单：${state.snapshot.participants.length} 人  |  中奖记录：${state.snapshot.records.length} 条`;
   elements.workbookPathText.textContent = `当前配置：${state.snapshot.configPath || LOCAL_CONFIG_LABEL}`;
+}
+
+function availablePrizeCount() {
+  return state.snapshot.prizes.reduce((sum, prize) => sum + Math.max(0, Number(prize.remainingQty) || 0), 0);
+}
+
+function uniquePrizeCount(records) {
+  return new Set(records.map((record) => record.prizeName)).size;
+}
+
+function updateStartButton() {
+  if (state.snapshot.records.length > 0) {
+    elements.startButton.disabled = false;
+    elements.startButton.innerHTML = "<span>抽奖完成</span>";
+    return;
+  }
+  elements.startButton.disabled = false;
+  elements.startButton.innerHTML = "<span>一键抽奖</span>";
+}
+
+function setDrawStatus(message) {
+  elements.drawStatusText.textContent = message;
+}
+
+function compactDrawErrorMessage(message) {
+  return message === "请先导入抽奖名单" ? "请导入名单" : message;
 }
 
 function renderAdminDialog() {
@@ -637,13 +639,16 @@ function renderAdminDialog() {
   }
 
   if (state.adminTab === "employees") {
-    renderAdminTable(["工号"], state.snapshot.employeeIds.map((employeeId) => [employeeId]));
+    renderAdminTable(["姓名", "工号"], state.snapshot.participants.map((participant) => [participant.name, participant.employeeId]));
   } else if (state.adminTab === "prizes") {
     renderPrizeSettings();
   } else {
     renderAdminTable(
-      ["工号", "奖品", "时间"],
-      state.snapshot.records.slice().reverse().map((record) => [record.employeeId, record.prizeName, record.time]),
+      ["姓名", "工号", "奖品", "时间"],
+      state.snapshot.records
+        .slice()
+        .reverse()
+        .map((record) => [record.name, record.employeeId, record.prizeName, record.time]),
     );
   }
 }
@@ -653,7 +658,7 @@ function renderPrizeSettings() {
     <div class="prize-settings-header">
       <div>
         <h3>奖品设置</h3>
-        <p>最多显示前 ${MAX_PRIZE_COUNT} 个奖品；图片会自动按比例适配九宫格。</p>
+        <p>${MIN_PRIZE_COUNT}-${MAX_PRIZE_COUNT} 种奖品</p>
       </div>
       <div class="prize-settings-actions">
         <button type="button" data-admin-action="add-prize">新增奖品</button>
@@ -667,6 +672,7 @@ function renderPrizeSettings() {
 }
 
 function renderPrizeEditorRow(prize, index) {
+  const description = String(prize?.description ?? "");
   return `
     <article class="prize-editor-row" data-prize-row="${index}">
       <div class="prize-preview-box">
@@ -678,6 +684,10 @@ function renderPrizeEditorRow(prize, index) {
       <label>
         <span>奖品名称</span>
         <input data-prize-field="name" value="${escapeAttribute(prize.name || "")}" maxlength="28" />
+      </label>
+      <label class="prize-description-field">
+        <span>奖品描述</span>
+        <textarea data-prize-field="description" maxlength="80" rows="3">${escapeHtml(description)}</textarea>
       </label>
       <label>
         <span>剩余数量</span>
@@ -704,12 +714,6 @@ function renderAdminTable(headers, rows) {
   `;
 }
 
-function openAdminDialog() {
-  elements.activityTitleInput.value = elements.activityTitle.textContent || DEFAULT_ACTIVITY_TITLE;
-  renderAdminDialog();
-  elements.adminDialog.showModal();
-}
-
 function openAdminLogin() {
   elements.adminPasswordInput.value = "";
   elements.adminLoginDialog.showModal();
@@ -717,15 +721,16 @@ function openAdminLogin() {
 }
 
 function verifyAdminLogin() {
-  const password = String(elements.adminPasswordInput.value ?? "").trim();
-  if (password !== state.snapshot.adminPassword) {
-    showToast("管理员密码不正确");
+  if (elements.adminPasswordInput.value !== configuredAdminPassword()) {
+    showToast("管理员密码错误");
+    elements.adminPasswordInput.value = "";
     elements.adminPasswordInput.focus();
     return;
   }
-
   elements.adminLoginDialog.close();
-  openAdminDialog();
+  elements.adminDialog.showModal();
+  state.adminTab = "employees";
+  renderAdminDialog();
 }
 
 function saveActivityTitle() {
@@ -751,6 +756,14 @@ function applyActivityTitle(title) {
   document.title = title;
 }
 
+function handleAdminEditablePointer(event) {
+  const input = findAdminEditableInput(event.target);
+  if (!input) {
+    return;
+  }
+  queueAdminInputFocus(input);
+}
+
 function handleAdminTableInput(event) {
   const row = event.target.closest?.("[data-prize-row]");
   const field = event.target.dataset?.prizeField;
@@ -765,26 +778,6 @@ function handleAdminTableInput(event) {
   state.prizeDrafts[index][field] = field === "remainingQty" ? Number(event.target.value) : event.target.value;
 }
 
-function handleAdminEditablePointer(event) {
-  const input = findAdminEditableInput(event.target);
-  if (!input) {
-    return;
-  }
-  queueAdminInputFocus(input);
-}
-
-function findAdminEditableInput(target) {
-  if (!target?.closest) {
-    return null;
-  }
-  if (target.matches?.("[data-prize-field]")) {
-    return target;
-  }
-
-  const label = target.closest("label");
-  return label?.querySelector?.("[data-prize-field]") || null;
-}
-
 async function handleAdminTableClick(event) {
   const action = event.target.dataset?.adminAction;
   if (!action) {
@@ -793,11 +786,11 @@ async function handleAdminTableClick(event) {
 
   if (action === "add-prize") {
     syncPrizeDraftsFromDom();
-    if (state.prizeDrafts.length >= elements.prizeCards.length) {
-      showToast("最多配置 8 个奖品");
+    if (state.prizeDrafts.length >= MAX_PRIZE_COUNT) {
+      showToast("最多配置 12 个奖品");
       return;
     }
-    state.prizeDrafts.unshift({ name: "", remainingQty: 0, imagePath: "", imageUrl: "" });
+    state.prizeDrafts.unshift({ name: "", description: "", remainingQty: 0, imagePath: "", imageUrl: "" });
     renderPrizeSettings();
     scrollPrizeSettingsTop();
     return;
@@ -806,6 +799,11 @@ async function handleAdminTableClick(event) {
   if (action === "remove-prize") {
     syncPrizeDraftsFromDom();
     const index = Number(event.target.dataset.prizeIndex);
+    const isRemovingNamedPrize = String(state.prizeDrafts[index]?.name ?? "").trim();
+    if (isRemovingNamedPrize && countValidPrizeDrafts(state.prizeDrafts) <= MIN_PRIZE_COUNT) {
+      showToast("至少保留 1 个奖品");
+      return;
+    }
     const prizeName = state.prizeDrafts[index]?.name || "未命名奖品";
     if (!window.confirm(`确认删除奖品“${prizeName}”？删除后会立即保存。`)) {
       return;
@@ -825,46 +823,44 @@ async function handleAdminTableClick(event) {
   }
 }
 
-function syncPrizeDraftsFromDom() {
-  const rows = [...elements.adminTableWrap.querySelectorAll("[data-prize-row]")];
-  state.prizeDrafts = rows.map((row) => {
-    const index = Number(row.dataset.prizeRow);
-    const existing = state.prizeDrafts[index] || {};
-    return {
-      ...existing,
-      name: row.querySelector('[data-prize-field="name"]').value,
-      remainingQty: Number(row.querySelector('[data-prize-field="remainingQty"]').value) || 0,
-    };
-  });
-}
-
-function scrollPrizeSettingsTop() {
-  elements.adminTableWrap.scrollTop = 0;
+function findAdminEditableInput(target) {
+  if (target?.matches?.(".admin-table-wrap input, .admin-table-wrap textarea, .admin-table-wrap select")) {
+    return target;
+  }
+  return target?.closest?.(".admin-table-wrap input, .admin-table-wrap textarea, .admin-table-wrap select") || null;
 }
 
 function queueAdminInputFocus(input) {
-  const focusInput = () => {
-    if (!input.isConnected) {
-      return;
-    }
-    try {
-      input.focus({ preventScroll: true });
-    } catch {
+  window.setTimeout(() => {
+    if (input?.isConnected) {
       input.focus();
     }
-  };
+  }, 0);
+}
 
-  if (typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(focusInput);
+function syncPrizeDraftsFromDom() {
+  const rows = elements.adminTableWrap.querySelectorAll?.("[data-prize-row]") || [];
+  for (const row of rows) {
+    const index = Number(row.dataset.prizeRow);
+    const draft = state.prizeDrafts[index];
+    if (!draft) {
+      continue;
+    }
+    for (const input of row.querySelectorAll("[data-prize-field]")) {
+      const field = input.dataset.prizeField;
+      draft[field] = field === "remainingQty" ? Number(input.value) : input.value;
+    }
   }
-  window.setTimeout(focusInput, 0);
+}
+
+function countValidPrizeDrafts(prizeDrafts) {
+  return normalizePrizes(prizeDrafts).length;
 }
 
 function uploadPrizeImage(index) {
   if (!state.prizeDrafts[index]) {
     return;
   }
-  syncPrizeDraftsFromDom();
   state.pendingPrizeImageIndex = index;
   elements.prizeImageInput.value = "";
   elements.prizeImageInput.click();
@@ -884,7 +880,7 @@ async function handlePrizeImageFileChange(event) {
     }
     const imageUrl = await readFileAsDataUrl(file);
     state.prizeDrafts[index] = {
-      ...(state.prizeDrafts[index] || { name: "", remainingQty: 0 }),
+      ...(state.prizeDrafts[index] || { name: "", description: "", remainingQty: 0 }),
       imagePath: file.name || "",
       imageUrl,
     };
@@ -902,8 +898,8 @@ async function savePrizeSettings(message = "奖品设置已保存", shouldSyncFr
     if (shouldSyncFromDom) {
       syncPrizeDraftsFromDom();
     }
-    const prizes = normalizePrizes(state.prizeDrafts);
-    const snapshot = saveSnapshot({ ...state.snapshot, prizes });
+    const prizes = validatePrizeDraftsForSave(state.prizeDrafts);
+    const snapshot = saveSnapshot({ ...state.snapshot, prizes, records: [] });
     applySnapshot(snapshot);
     state.adminTab = "prizes";
     renderAdminDialog();
@@ -913,74 +909,16 @@ async function savePrizeSettings(message = "奖品设置已保存", shouldSyncFr
   }
 }
 
-function advanceHighlight() {
-  const highlightableIndexes = getHighlightablePrizeIndexes();
-  if (highlightableIndexes.length === 0) {
-    return;
+function validatePrizeDraftsForSave(prizeDrafts) {
+  const validPrizes = normalizePrizes(prizeDrafts);
+  if (validPrizes.length < MIN_PRIZE_COUNT) {
+    throw new Error("请至少配置 1 个有效奖品");
   }
-  if (state.activeIndex >= 0) {
-    elements.prizeCards[state.activeIndex]?.classList.remove("active");
-  }
-  const currentPosition = highlightableIndexes.indexOf(state.activeIndex);
-  const nextPosition = currentPosition >= 0 ? (currentPosition + 1) % highlightableIndexes.length : 0;
-  state.activeIndex = highlightableIndexes[nextPosition];
-  elements.prizeCards[state.activeIndex].classList.add("active");
+  return validPrizes;
 }
 
-function getHighlightablePrizeIndexes() {
-  const visiblePrizes = state.snapshot.prizes.slice(0, elements.prizeCards.length);
-  return CLOCKWISE_PRIZE_CARD_INDEXES.filter((index) => {
-    const prize = visiblePrizes[index];
-    return prize && Number(prize.remainingQty) > 0;
-  });
-}
-
-function markWinner(prizeName) {
-  clearWinnerMarks();
-  const index = state.snapshot.prizes.slice(0, elements.prizeCards.length).findIndex((prize) => prize.name === prizeName);
-  if (index >= 0) {
-    elements.prizeCards[index].classList.add("winner");
-  }
-}
-
-function clearWinnerMarks() {
-  for (const card of elements.prizeCards) {
-    card.classList.remove("active", "winner");
-  }
-  state.activeIndex = -1;
-}
-
-function resetInput() {
-  elements.employeeInput.value = "";
-  elements.employeeInput.disabled = false;
-  if (!isAdminSurfaceOpen()) {
-    elements.employeeInput.focus();
-  }
-  elements.hintText.textContent = "工号为7位数字；扫码枪9位编码会自动识别前7位";
-}
-
-function isAdminSurfaceOpen() {
-  return elements.adminDialog.open || elements.adminLoginDialog.open;
-}
-
-function setResult(text, prize, imageSrc) {
-  const mode = resultMode(text);
-  elements.resultTitle.textContent =
-    mode === "winner" ? "中奖结果" : mode === "status" ? "抽奖状态" : "提示信息";
-  elements.resultText.textContent = text;
-  elements.resultPrize.textContent = prize;
-  elements.resultImage.hidden = mode !== "winner";
-  elements.resultImage.src = mode === "winner" ? imageSrc || "../assets/prizes/gift.png" : "";
-}
-
-function resultMode(text) {
-  if (text === "恭喜您抽中") {
-    return "winner";
-  }
-  if (text === "等待抽奖" || text === "抽奖中") {
-    return "status";
-  }
-  return "notice";
+function scrollPrizeSettingsTop() {
+  elements.adminTableWrap.scrollTop = 0;
 }
 
 function renderPrizeVisual(prize) {
@@ -1041,7 +979,7 @@ function configuredDefaultActivityTitle() {
 
 function ensureXlsx() {
   if (!window.XLSX) {
-    throw new Error("Excel组件未加载，请确认 app/vendor/xlsx.full.min.js 存在");
+    throw new Error("Excel 组件未加载");
   }
   return window.XLSX;
 }
@@ -1049,8 +987,8 @@ function ensureXlsx() {
 function readFileAsArrayBuffer(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.addEventListener("error", () => reject(reader.error || new Error("文件读取失败")));
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("文件读取失败"));
     reader.readAsArrayBuffer(file);
   });
 }
@@ -1058,31 +996,25 @@ function readFileAsArrayBuffer(file) {
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(String(reader.result || "")));
-    reader.addEventListener("error", () => reject(reader.error || new Error("图片读取失败")));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
     reader.readAsDataURL(file);
   });
 }
 
-function downloadBlob(blob, fileName) {
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = fileName;
+  link.download = filename;
   document.body.append(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  URL.revokeObjectURL(url);
 }
 
-function startClock() {
-  const update = () => {
-    const now = new Date();
-    const weekday = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][now.getDay()];
-    elements.clockText.textContent = `${formatNow(now)}\n${weekday}`;
-  };
-  update();
-  window.setInterval(update, 1000);
+function updateClock() {
+  elements.clockText.textContent = formatNow();
 }
 
 function showToast(message) {
@@ -1099,20 +1031,14 @@ function showToast(message) {
 }
 
 function placeToastOnVisibleSurface() {
-  const host = activeToastHost();
+  const host = elements.adminDialog.open
+    ? elements.adminDialog
+    : elements.adminLoginDialog.open
+      ? elements.adminLoginDialog
+      : document.body;
   if (elements.toast.parentElement !== host) {
     host.append(elements.toast);
   }
-}
-
-function activeToastHost() {
-  if (elements.adminDialog.open) {
-    return elements.adminDialog;
-  }
-  if (elements.adminLoginDialog.open) {
-    return elements.adminLoginDialog;
-  }
-  return document.body;
 }
 
 function escapeHtml(value) {

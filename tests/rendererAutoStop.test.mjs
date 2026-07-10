@@ -12,6 +12,7 @@ function createElement() {
     files: [],
     hidden: false,
     isConnected: true,
+    parentElement: null,
     src: "",
     textContent: "",
     value: "",
@@ -70,20 +71,23 @@ function createRendererHarness(options = {}) {
     "adminPasswordInput",
     "loginSubmitButton",
     "clockText",
-    "employeeInput",
-    "hintText",
+    "drawStatusText",
     "dataStatus",
     "importButton",
     "exportButton",
     "refreshButton",
     "adminButton",
     "startButton",
-    "resultImage",
-    "resultTitle",
-    "resultText",
-    "resultPrize",
-    "recordsBody",
+    "showcasePanel",
+    "showcaseTitle",
+    "showcaseMeta",
+    "prizeShowcase",
+    "winnersShowcase",
+    "winnerTicker",
+    "drawAnimation",
     "employeeCount",
+    "prizeCount",
+    "winnerCount",
     "participantCount",
     "adminDialog",
     "workbookPathText",
@@ -95,7 +99,11 @@ function createRendererHarness(options = {}) {
     "toast",
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, createElement()]));
-  const prizeCards = Array.from({ length: 8 }, createElement);
+  const tabButtons = ["employees", "prizes", "records"].map((tab) => {
+    const button = createElement();
+    button.dataset.tab = tab;
+    return button;
+  });
   const timeouts = new Map();
   const intervals = new Map();
   const windowListeners = {};
@@ -105,9 +113,15 @@ function createRendererHarness(options = {}) {
     workbookPath: "浏览器本地存储",
     configPath: "浏览器本地存储",
     adminPassword: "123456",
-    activityTitle: options.activityTitle || "2026年9月 EHS活动 抽奖",
-    employeeIds: ["1234567"],
-    prizes: options.prizes || [{ name: "小风扇", remainingQty: 1, imageUrl: "../assets/prizes/fan.png" }],
+    activityTitle: options.activityTitle || "年度活动抽奖",
+    participants: options.participants || [
+      { employeeId: "1000001", name: "王晨" },
+      { employeeId: "1000002", name: "李佳" },
+    ],
+    prizes: options.prizes || [
+      { name: "蓝牙耳机", remainingQty: 1, imageUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" },
+      { name: "保温杯", remainingQty: 1, imageUrl: "" },
+    ],
     records: options.records || [],
   };
 
@@ -119,11 +133,8 @@ function createRendererHarness(options = {}) {
       return selector.startsWith("#") ? elements[selector.slice(1)] : null;
     },
     querySelectorAll(selector) {
-      if (selector === ".prize-card") {
-        return prizeCards;
-      }
       if (selector === ".tab-button") {
-        return [];
+        return tabButtons;
       }
       return [];
     },
@@ -131,10 +142,10 @@ function createRendererHarness(options = {}) {
 
   globalThis.localStorage = {
     getItem(key) {
-      return key === "ehs-lottery-static-state-v1" ? JSON.stringify(snapshot) : null;
+      return key === "activity-lottery-batch-state-v1" ? JSON.stringify(snapshot) : null;
     },
     setItem(key, value) {
-      if (key !== "ehs-lottery-static-state-v1") {
+      if (key !== "activity-lottery-batch-state-v1") {
         return;
       }
       saveCalls += 1;
@@ -147,7 +158,7 @@ function createRendererHarness(options = {}) {
     confirm: () => true,
     LOTTERY_CONFIG: {
       adminPassword: "123456",
-      defaultActivityTitle: options.activityTitle || "2026年9月 EHS活动 抽奖",
+      defaultActivityTitle: options.activityTitle || "年度活动抽奖",
     },
     addEventListener(type, handler) {
       windowListeners[type] = handler;
@@ -161,7 +172,7 @@ function createRendererHarness(options = {}) {
     setInterval(callback, ms) {
       const id = nextTimerId;
       nextTimerId += 1;
-      intervals.set(id, { callback, ms });
+      intervals.set(id, { callback, ms, name: callback.name });
       return id;
     },
     setTimeout(callback, ms) {
@@ -182,11 +193,14 @@ function createRendererHarness(options = {}) {
   return {
     elements,
     intervals,
-    prizeCards,
+    tabButtons,
     timeouts,
     windowListeners,
     getSaveCalls() {
       return saveCalls;
+    },
+    getSnapshot() {
+      return snapshot;
     },
   };
 }
@@ -194,10 +208,6 @@ function createRendererHarness(options = {}) {
 async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function activePrizeCardIndex(prizeCards) {
-  return prizeCards.findIndex((card) => card.classList.contains("active"));
 }
 
 async function test(name, fn) {
@@ -214,184 +224,99 @@ async function test(name, fn) {
   }
 }
 
-await test("draw runs quickly and stops immediately after a second click", async () => {
+await test("batch draw plays animation before saving and showing winners", async () => {
   const harness = createRendererHarness();
-  await import(`../app/renderer.js?autoStopTest=${Date.now()}`);
+  await import(`../app/renderer.js?batchAnimationTest=${Date.now()}`);
   await flushPromises();
 
-  harness.elements.employeeInput.value = "1234567";
+  assert.match(harness.elements.prizeShowcase.innerHTML, /蓝牙耳机/);
+  assert.equal(harness.elements.winnersShowcase.hidden, true);
+
   harness.elements.startButton.listeners.click();
   await flushPromises();
 
   assert.equal(harness.getSaveCalls(), 0);
-  assert.equal(harness.elements.startButton.innerHTML, "停止<br />抽奖");
-  assert.equal([...harness.timeouts.values()].some((timer) => timer.name === "stopDraw"), false);
-  assert.ok(
-    [...harness.timeouts.values()].some((timer) => timer.name === "runHighlightFrame" && timer.ms <= 36),
-    "expected the running highlight animation to use a fast interval",
-  );
+  assert.equal(harness.elements.startButton.disabled, true);
+  assert.equal(harness.elements.drawAnimation.hidden, false);
+  assert.equal(harness.elements.showcaseTitle.textContent, "抽奖中");
 
-  harness.elements.startButton.listeners.click();
+  const finishTimer = [...harness.timeouts.values()].find((timer) => timer.name === "finalizeBatchDraw");
+  assert.ok(finishTimer, "expected batch draw to wait for an animation timer");
+  assert.ok(finishTimer.ms >= 1200, "animation should be visible before results are committed");
+
+  await finishTimer.callback();
   await flushPromises();
 
   assert.equal(harness.getSaveCalls(), 1);
-  assert.equal(harness.elements.startButton.innerHTML, "开始<br />抽奖");
-  assert.equal([...harness.timeouts.values()].some((entry) => entry.name === "runHighlightFrame"), false);
+  assert.equal(harness.getSnapshot().records.length, 2);
+  assert.equal(harness.elements.drawAnimation.hidden, true);
+  assert.equal(harness.elements.winnersShowcase.hidden, false);
+  assert.equal(harness.elements.prizeShowcase.hidden, true);
+  assert.match(harness.elements.winnerTicker.innerHTML, /王晨/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /1000001/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /蓝牙耳机|保温杯/);
 });
 
-await test("spacebar stops a running draw immediately", async () => {
-  const harness = createRendererHarness();
-  await import(`../app/renderer.js?spaceStopTest=${Date.now()}`);
-  await flushPromises();
-
-  harness.elements.employeeInput.value = "1234567";
-  harness.elements.startButton.listeners.click();
-  await flushPromises();
-
-  let defaultPrevented = false;
-  harness.windowListeners.keydown({
-    key: " ",
-    preventDefault() {
-      defaultPrevented = true;
-    },
-  });
-  await flushPromises();
-
-  assert.equal(defaultPrevented, true);
-  assert.equal(harness.getSaveCalls(), 1);
-  assert.equal(harness.elements.startButton.innerHTML, "开始<br />抽奖");
-});
-
-await test("draw keeps clockwise order while running and stops without deceleration", async () => {
-  const prizes = Array.from({ length: 8 }, (_, index) => ({
-    name: `奖品${index + 1}`,
-    remainingQty: 1,
-    imageUrl: "",
+await test("existing winner records render 36 winners in a compact non-scrolling grid", async () => {
+  const records = Array.from({ length: 36 }, (_, index) => ({
+    employeeId: String(1000000 + index),
+    name: `中奖者${index + 1}`,
+    prizeName: "全勤参与奖",
+    time: "2026-09-01 10:25:31",
   }));
-  const clockwiseOrder = [0, 1, 2, 4, 7, 6, 5, 3];
-  const harness = createRendererHarness({ prizes });
-  await import(`../app/renderer.js?clockwiseStopTest=${Date.now()}`);
+  const harness = createRendererHarness({
+    prizes: [{ name: "全勤参与奖", description: "50元小卖部卡", remainingQty: 36 }],
+    records,
+  });
+  await import(`../app/renderer.js?compactWinnerGridTest=${Date.now()}`);
   await flushPromises();
 
-  harness.elements.employeeInput.value = "1234567";
-  harness.elements.startButton.listeners.click();
-  await flushPromises();
-
-  const runningSequence = [activePrizeCardIndex(harness.prizeCards)];
-  for (let index = 0; index < 5; index += 1) {
-    const timer = [...harness.timeouts.values()].find((entry) => entry.name === "runHighlightFrame");
-    assert.ok(timer, "expected running draw to keep scheduling highlight frames");
-    await timer.callback();
-    await flushPromises();
-    runningSequence.push(activePrizeCardIndex(harness.prizeCards));
-  }
-  assert.deepEqual(runningSequence, clockwiseOrder.slice(0, runningSequence.length));
-
-  const beforeStopIndex = activePrizeCardIndex(harness.prizeCards);
-  harness.elements.startButton.listeners.click();
-  await flushPromises();
-
-  const expectedStart = clockwiseOrder.indexOf(beforeStopIndex);
-
-  assert.ok(expectedStart >= 0);
-  assert.equal(harness.getSaveCalls(), 1);
-  assert.equal([...harness.timeouts.values()].some((entry) => entry.name === "runHighlightFrame"), false);
+  assert.equal(harness.elements.showcaseTitle.textContent, "中奖名单");
+  assert.equal(harness.elements.winnersShowcase.hidden, false);
+  assert.equal(harness.elements.winnerTicker.classList.contains("compact-grid"), true);
+  assert.equal(harness.elements.winnerTicker.classList.contains("scrolling"), false);
+  assert.match(harness.elements.winnerTicker.innerHTML, /class="winner-track"/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /class="winner-employee-id"/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /中奖者36/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /1000035/);
 });
 
-await test("draw highlight skips unconfigured prize slots", async () => {
-  const prizes = Array.from({ length: 7 }, (_, index) => ({
-    name: `奖品${index + 1}`,
-    remainingQty: 1,
-    imageUrl: "",
+await test("winner records still enable scrolling when they exceed the one-screen grid limit", async () => {
+  const records = Array.from({ length: 48 }, (_, index) => ({
+    employeeId: String(1000000 + index),
+    name: `中奖者${index + 1}`,
+    prizeName: "全勤参与奖",
+    time: "2026-09-01 10:25:31",
   }));
-  const harness = createRendererHarness({ prizes });
-  await import(`../app/renderer.js?emptyHighlightTest=${Date.now()}`);
+  const harness = createRendererHarness({ records });
+  harness.elements.winnerTicker.clientHeight = 300;
+  harness.elements.winnerTicker.scrollHeight = 900;
+  await import(`../app/renderer.js?scrollingWinnerTest=${Date.now()}`);
   await flushPromises();
 
-  harness.elements.employeeInput.value = "1234567";
-  harness.elements.startButton.listeners.click();
-  await flushPromises();
-
-  for (let index = 0; index < 12; index += 1) {
-    const highlightTimer = [...harness.timeouts.values()].find((timer) => timer.name === "runHighlightFrame");
-    assert.ok(highlightTimer, "expected startDraw to schedule highlight frames");
-    await highlightTimer.callback();
-    assert.equal(harness.prizeCards[7].classList.contains("active"), false);
-  }
+  assert.equal(harness.elements.winnerTicker.classList.contains("compact-grid"), false);
+  assert.equal(harness.elements.winnerTicker.classList.contains("scrolling"), true);
+  assert.match(harness.elements.winnerTicker.innerHTML, /class="winner-track"/);
+  assert.match(harness.elements.winnerTicker.innerHTML, /中奖者48/);
+  assert.equal([...harness.intervals.values()].some((timer) => timer.name === "advanceWinnerAutoScroll"), false);
+  assert.equal([...harness.timeouts.values()].some((timer) => timer.name === "resumeWinnerAutoScroll"), false);
+  assert.equal(harness.elements.winnerTicker.listeners.wheel, undefined);
 });
 
-await test("main prize cards hide stock counts and show sold-out placeholders", async () => {
-  const harness = createRendererHarness({
-    prizes: [
-      { name: "小风扇", remainingQty: 0, imageUrl: "../assets/prizes/fan.png" },
-      { name: "天堂伞", remainingQty: 2, imageUrl: "" },
-    ],
-  });
-  await import(`../app/renderer.js?soldOutPrizeCardTest=${Date.now()}`);
+await test("batch draw refuses to run without participants or available prizes", async () => {
+  const harness = createRendererHarness({ participants: [], prizes: [{ name: "蓝牙耳机", remainingQty: 1 }] });
+  await import(`../app/renderer.js?emptyBatchTest=${Date.now()}`);
   await flushPromises();
 
-  assert.match(harness.prizeCards[0].innerHTML, /已抽完/);
-  assert.doesNotMatch(harness.prizeCards[0].innerHTML, /剩余/);
-  assert.match(harness.prizeCards[1].innerHTML, /天堂伞/);
-  assert.doesNotMatch(harness.prizeCards[1].innerHTML, /剩余：2/);
-});
-
-await test("notice result states hide the prize image and do not keep the winning title", async () => {
-  const harness = createRendererHarness({
-    records: [{ employeeId: "1234567", prizeName: "小风扇", time: "2026-06-09 09:30:00" }],
-  });
-  await import(`../app/renderer.js?noticeResultStateTest=${Date.now()}`);
-  await flushPromises();
-
-  harness.elements.employeeInput.value = "1234567";
-  harness.elements.startButton.listeners.click();
-  await flushPromises();
-
-  assert.equal(harness.elements.resultTitle.textContent, "提示信息");
-  assert.equal(harness.elements.resultText.textContent, "提示");
-  assert.equal(harness.elements.resultPrize.textContent, "您已参与过抽奖，不能重复参加");
-  assert.equal(harness.elements.resultImage.hidden, true);
-});
-
-await test("ineligible draw attempts are not saved or shown as winning records", async () => {
-  const harness = createRendererHarness({
-    records: [
-      { employeeId: "9100000", prizeName: "无抽奖资格", time: "2026-06-09 09:34:37" },
-      { employeeId: "9100007", prizeName: "10元小卖部购物券", time: "2026-06-09 09:34:09" },
-    ],
-  });
-  await import(`../app/renderer.js?ineligibleRecordsTest=${Date.now()}`);
-  await flushPromises();
-
-  assert.doesNotMatch(harness.elements.recordsBody.innerHTML, /无抽奖资格/);
-  assert.match(harness.elements.recordsBody.innerHTML, /10元小卖部购物券/);
-
-  harness.elements.employeeInput.value = "9999999";
   harness.elements.startButton.listeners.click();
   await flushPromises();
 
   assert.equal(harness.getSaveCalls(), 0);
-  assert.equal(harness.elements.resultPrize.textContent, "您未按时完成答题，无法参与抽奖");
-  assert.doesNotMatch(harness.elements.recordsBody.innerHTML, /9999999/);
+  assert.equal(harness.elements.drawStatusText.textContent, "请导入名单");
+  assert.equal(harness.elements.startButton.disabled, false);
 });
 
-await test("toast remains visible for three seconds", async () => {
-  const harness = createRendererHarness();
-  await import(`../app/renderer.js?toastDurationTest=${Date.now()}`);
-  await flushPromises();
-
-  harness.elements.adminButton.listeners.click();
-  harness.elements.adminPasswordInput.value = "wrong";
-  harness.elements.loginSubmitButton.listeners.click();
-  await flushPromises();
-
-  assert.equal(
-    [...harness.timeouts.values()].some((timer) => timer.ms === 3000),
-    true,
-  );
-});
-
-await test("admin dialogs keep focus from being stolen by main employee input resets", async () => {
+await test("admin dialogs keep focus within the visible admin surface", async () => {
   const harness = createRendererHarness();
   await import(`../app/renderer.js?adminFocusTest=${Date.now()}`);
   await flushPromises();
@@ -401,7 +326,7 @@ await test("admin dialogs keep focus from being stolen by main employee input re
   harness.elements.refreshButton.listeners.click();
   await flushPromises();
 
-  assert.notEqual(globalThis.document.activeElement, harness.elements.employeeInput);
+  assert.equal(globalThis.document.activeElement, harness.elements.activityTitleInput);
 
   harness.elements.adminDialog.close();
   harness.elements.adminLoginDialog.showModal();
@@ -409,7 +334,7 @@ await test("admin dialogs keep focus from being stolen by main employee input re
   harness.elements.refreshButton.listeners.click();
   await flushPromises();
 
-  assert.notEqual(globalThis.document.activeElement, harness.elements.employeeInput);
+  assert.equal(globalThis.document.activeElement, harness.elements.adminPasswordInput);
 });
 
 await test("admin password is required every time the admin page is opened", async () => {
@@ -436,45 +361,20 @@ await test("admin password is required every time the admin page is opened", asy
   assert.equal(harness.elements.adminPasswordInput.value, "");
 });
 
-await test("toast is attached to the visible admin surface instead of staying behind the modal backdrop", async () => {
-  const harness = createRendererHarness();
-  await import(`../app/renderer.js?adminToastHostTest=${Date.now()}`);
-  await flushPromises();
-
-  harness.elements.adminButton.listeners.click();
-  harness.elements.adminPasswordInput.value = "wrong";
-  harness.elements.loginSubmitButton.listeners.click();
-  await flushPromises();
-
-  assert.equal(harness.elements.toast.parentElement, harness.elements.adminLoginDialog);
-  assert.equal(harness.elements.toast.classList.contains("visible"), true);
-
-  harness.elements.adminPasswordInput.value = "123456";
-  harness.elements.loginSubmitButton.listeners.click();
-  await flushPromises();
-
-  harness.elements.activityTitleInput.value = "2026年9月 管理员弹窗提示测试";
-  harness.elements.saveTitleButton.listeners.click();
-  await flushPromises();
-
-  assert.equal(harness.elements.toast.parentElement, harness.elements.adminDialog);
-  assert.equal(harness.elements.toast.textContent, "活动标题已保存");
-});
-
 await test("admin title setting persists and updates the visible title", async () => {
   const harness = createRendererHarness({
-    activityTitle: "2026年9月 安全月活动抽奖",
+    activityTitle: "年度活动抽奖",
   });
   await import(`../app/renderer.js?titleSettingTest=${Date.now()}`);
   await flushPromises();
 
-  assert.equal(harness.elements.activityTitle.textContent, "2026年9月 安全月活动抽奖");
-  assert.equal(harness.elements.footerActivityTitle.textContent, "活动名称：2026年9月 安全月活动抽奖");
+  assert.equal(harness.elements.activityTitle.textContent, "年度活动抽奖");
+  assert.equal(harness.elements.footerActivityTitle.textContent, "活动名称：年度活动抽奖");
 
-  harness.elements.activityTitleInput.value = "2026年10月 EHS知识竞赛抽奖";
+  harness.elements.activityTitleInput.value = "2026 年度幸运抽奖";
   harness.elements.saveTitleButton.listeners.click();
   await flushPromises();
 
-  assert.equal(harness.elements.activityTitle.textContent, "2026年10月 EHS知识竞赛抽奖");
-  assert.equal(harness.elements.footerActivityTitle.textContent, "活动名称：2026年10月 EHS知识竞赛抽奖");
+  assert.equal(harness.elements.activityTitle.textContent, "2026 年度幸运抽奖");
+  assert.equal(harness.elements.footerActivityTitle.textContent, "活动名称：2026 年度幸运抽奖");
 });

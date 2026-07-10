@@ -45,6 +45,16 @@ test("electron main is only a static shell with no workbook IPC or preload bridg
   assert.equal(fs.existsSync("config"), false);
 });
 
+test("front stage is a batch lottery screen without employee input or nine-grid controls", () => {
+  assert.match(indexHtml, /class="control-panel"/);
+  assert.match(indexHtml, /class="showcase-panel"/);
+  assert.match(indexHtml, /id="prizeShowcase"/);
+  assert.match(indexHtml, /id="winnersShowcase"/);
+  assert.match(indexHtml, /id="drawAnimation"/);
+  assert.doesNotMatch(indexHtml, /id="employeeInput"|请输入或扫描工号|九宫格奖品展示/);
+  assert.doesNotMatch(renderer, /elements\.employeeInput|id="employeeInput"/);
+});
+
 test("windows nsis package uses generic installation names and ascii executable names", () => {
   assert.equal(packageConfig.name, "activity-lottery-web");
   assert.equal(packageConfig.build.productName, "活动抽奖系统");
